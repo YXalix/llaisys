@@ -29,7 +29,13 @@ __C {
         llaisysTensor_t *mlp_down_w;
     };
 
-    struct LlaisysQwen2Model;
+    struct LlaisysQwen2Model {
+        const LlaisysQwen2Meta *meta;
+        llaisysDeviceType_t device;
+        int *device_ids;
+        int ndevice;
+        LlaisysQwen2Weights weights;
+    };
 
     __export struct LlaisysQwen2Model *llaisysQwen2ModelCreate(const LlaisysQwen2Meta *meta, llaisysDeviceType_t device, int *device_ids, int ndevice);
 

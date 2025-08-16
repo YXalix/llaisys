@@ -95,6 +95,20 @@ target("llaisys-ops")
     on_install(function (target) end)
 target_end()
 
+target("llaisys-models")
+    set_kind("static")
+
+    set_languages("cxx17")
+    set_warnings("all", "error")
+    if not is_plat("windows") then
+        add_cxflags("-fPIC", "-Wno-unknown-pragmas")
+    end
+
+    add_files("src/models/*.cpp")
+
+    on_install(function (target) end)
+target_end()
+
 target("llaisys")
     set_kind("shared")
     add_deps("llaisys-utils")
@@ -102,11 +116,23 @@ target("llaisys")
     add_deps("llaisys-core")
     add_deps("llaisys-tensor")
     add_deps("llaisys-ops")
+    add_deps("llaisys-models")
 
     set_languages("cxx17")
     set_warnings("all", "error")
     add_files("src/llaisys/*.cc")
+    add_files("src/llaisys/models/*.cc")
     set_installdir(".")
+
+    -- Debug configuration
+    if is_mode("debug") then
+        set_symbols("debug")
+        set_optimize("none")
+        add_defines("DEBUG", "_DEBUG")
+        if not is_plat("windows") then
+            add_cxflags("-g", "-O0")
+        end
+    end
 
     
     after_install(function (target)
