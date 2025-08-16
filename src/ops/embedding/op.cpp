@@ -7,13 +7,10 @@
 namespace llaisys::ops {
 void embedding(tensor_t out, tensor_t index, tensor_t weight) {
     CHECK_SAME_DEVICE(out, index, weight);
-
     // Check index dtype
     CHECK_ARGUMENT(index->dtype() == LLAISYS_DTYPE_I64, "index must be int64 type");
-    
     // Check output and weight dtype match
     CHECK_SAME_DTYPE(out->dtype(), weight->dtype());
-    
     // Check that all tensors are contiguous
     ASSERT(out->isContiguous() && index->isContiguous() && weight->isContiguous(), 
            "Embedding: all tensors must be contiguous.");

@@ -10,9 +10,8 @@ void argmax_(IdxT *max_idx, T *max_val, const T *vals, size_t size) {
     IdxT max_index = 0;
     
     for (size_t i = 1; i < size; i++) {
-        T current_val;
         if constexpr (std::is_same_v<T, llaisys::bf16_t> || std::is_same_v<T, llaisys::fp16_t>) {
-            current_val = llaisys::utils::cast<T>(llaisys::utils::cast<float>(vals[i]));
+            T current_val = llaisys::utils::cast<T>(llaisys::utils::cast<float>(vals[i]));
             T max_val_converted = llaisys::utils::cast<T>(llaisys::utils::cast<float>(max_value));
             if (llaisys::utils::cast<float>(current_val) > llaisys::utils::cast<float>(max_val_converted)) {
                 max_value = current_val;
