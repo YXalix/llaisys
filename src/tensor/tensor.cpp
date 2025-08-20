@@ -165,7 +165,7 @@ void Tensor::debug() const {
 
 bool Tensor::isContiguous() const {
     ptrdiff_t stride = 1;
-    for (int i = this->ndim() - 1; i >= 0; i--) {
+    for (size_t i = this->ndim(); i-- > 0;) {
         if (this->strides()[i] != stride) {
             return false;
         }

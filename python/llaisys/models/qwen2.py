@@ -1,6 +1,7 @@
 from typing import Sequence
 from ctypes import POINTER, cast
 from pathlib import Path
+from modelscope.hub.snapshot_download import snapshot_download
 import safetensors
 from ..libllaisys.tensor import llaisysTensor_t
 
@@ -77,9 +78,8 @@ class Qwen2:
             self._tensor_refs = {}
 
             # 3. 加载权重
-            if not model_path:
-                model_path = "/"
-            for file in sorted(Path(model_path).glob("*.safetensors")):
+            model_dir = snapshot_download('deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B')
+            for file in sorted(Path(model_dir).glob("*.safetensors")):
                 print(f"Loading model weights from {file}")
                 with safetensors.safe_open(file, framework="pt", device="cpu") as f:
                     for name_ in f.keys():

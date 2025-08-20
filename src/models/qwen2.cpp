@@ -102,7 +102,10 @@ namespace llaisys {
             // 应用输入嵌入
             auto in_embed_tensor = weights.in_embed->tensor;
             llaisys::ops::embedding(x, input_ids, in_embed_tensor);
-            
+
+            // int start_time_create = clock();
+
+
             // 预分配中间张量以减少内存分配开销
             auto attn_input = llaisys::Tensor::create({ntoken, meta->hs}, meta->dtype, model->device);
             auto attn_residual = llaisys::Tensor::create({ntoken, meta->hs}, meta->dtype, model->device);
@@ -133,8 +136,19 @@ namespace llaisys {
             auto mlp_hidden = llaisys::Tensor::create({ntoken, mlp_hidden_dim}, meta->dtype, model->device);
             auto mlp_output = llaisys::Tensor::create({ntoken, meta->hs}, meta->dtype, model->device);
 
+            // 最终输出相关张量 - 优化后只需要小张量
+            auto max_idx = llaisys::Tensor::create({1}, LLAISYS_DTYPE_I64, model->device);
+            auto max_val = llaisys::Tensor::create({1}, meta->dtype, model->device);
+
+            // printf("Time to create tensors: %.2f ms\n", (clock() - start_time_create) * 1000.0 / CLOCKS_PER_SEC);
+
             // 2. Transformer层
             for (size_t layer = 0; layer < meta->nlayer; ++layer) {
+                // time trace
+                printf("Layer %zu: Start\n", layer);
+                // int layer_start = clock();
+                // int attn_start = clock();
+                
                 // 获取当前层的权重
                 auto attn_norm_w = weights.attn_norm_w[layer]->tensor;
                 auto attn_q_w = weights.attn_q_w[layer]->tensor;
@@ -153,10 +167,12 @@ namespace llaisys {
                 // 注意力前的LayerNorm
                 llaisys::ops::rms_norm(attn_input, x, attn_norm_w, meta->epsilon);
                 
+                // int linear_start = clock();
                 // Q, K, V投影 - 复用预分配的张量
                 llaisys::ops::linear(q, attn_input, attn_q_w, attn_q_b);
                 llaisys::ops::linear(k, attn_input, attn_k_w, attn_k_b);
                 llaisys::ops::linear(v, attn_input, attn_v_w, attn_v_b);
+                // printf("Layer %zu: QKV Linear time %.2f ms\n", layer, (clock() - linear_start) * 1000.0 / CLOCKS_PER_SEC);
                 
                 // 将Q和K重塑为3D张量以适配RoPE操作
                 // Q: [ntoken, hidden_size] -> [ntoken, n_heads, head_dim]
@@ -165,76 +181,92 @@ namespace llaisys {
                 // K: [ntoken, nkvh * head_dim] -> [ntoken, n_kv_heads, head_dim]
                 auto k_3d = k->view({ntoken, meta->nkvh, meta->dh});
                 
+                // int rope_start = clock();
                 llaisys::ops::rope(q_rope_3d, q_3d, pos_ids, meta->theta);
                 llaisys::ops::rope(k_rope_3d, k_3d, pos_ids, meta->theta);
+                // printf("Layer %zu: RoPE time %.2f ms\n", layer, (clock() - rope_start) * 1000.0 / CLOCKS_PER_SEC);
                 
                 // 自注意力计算 - 直接使用3D张量
                 auto v_3d = v->view({ntoken, meta->nkvh, meta->dh});
                 float scale = 1.0f / std::sqrt(static_cast<float>(meta->dh));
+                
+                // int self_attn_start = clock();
                 llaisys::ops::self_attention(attn_output_3d, q_rope_3d, k_rope_3d, v_3d, scale);
+                // printf("Layer %zu: Self-Attention time %.2f ms\n", layer, (clock() - self_attn_start) * 1000.0 / CLOCKS_PER_SEC);
                 
                 // 将注意力输出重塑回2D
                 auto attn_output = attn_output_3d->view({ntoken, meta->hs});
                 
                 // 注意力输出投影 - 复用预分配的张量
+                // int attn_proj_start = clock();
                 llaisys::ops::linear(attn_proj, attn_output, attn_o_w, nullptr);
+                // printf("Layer %zu: Attention Projection time %.2f ms\n", layer, (clock() - attn_proj_start) * 1000.0 / CLOCKS_PER_SEC);
                 
                 // 残差连接: attn_residual = x + attn_proj
                 llaisys::ops::add(attn_residual, x, attn_proj);
                 
+                // printf("Layer %zu: Total Attention time %.2f ms\n", layer, (clock() - attn_start) * 1000.0 / CLOCKS_PER_SEC);
+                
                 // 2.2 MLP
+                // int mlp_start = clock();
                 // MLP前的LayerNorm
                 llaisys::ops::rms_norm(mlp_input, attn_residual, mlp_norm_w, meta->epsilon);
                 
                 // MLP层：SwiGLU激活
-                // 从权重矩阵形状推断正确的输出维度
-                // size_t mlp_hidden_dim = mlp_gate_w->shape()[0];
-                // auto gate = llaisys::Tensor::create({ntoken, mlp_hidden_dim}, meta->dtype, model->device);
-                // auto up = llaisys::Tensor::create({ntoken, mlp_hidden_dim}, meta->dtype, model->device);
-                
+                // int mlp_linear_start = clock();
+                // for (auto s : gate->shape()) {
+                //     printf("Layer %zu: MLP Gate shape dim %zu\n", layer, s);
+                // }
+                // for (auto s : up->shape()) {
+                //     printf("Layer %zu: MLP Up shape dim %zu\n", layer, s);
+                // }
                 llaisys::ops::linear(gate, mlp_input, mlp_gate_w, nullptr);
                 llaisys::ops::linear(up, mlp_input, mlp_up_w, nullptr);
-                // auto mlp_hidden = llaisys::Tensor::create({ntoken, mlp_hidden_dim}, meta->dtype, model->device);
+                // printf("Layer %zu: MLP Gate/Up Linear time %.2f ms\n", layer, (clock() - mlp_linear_start) * 1000.0 / CLOCKS_PER_SEC);
+                
                 llaisys::ops::swiglu(mlp_hidden, gate, up);
                 
                 // MLP输出投影
-                // auto mlp_output = llaisys::Tensor::create({ntoken, meta->hs}, meta->dtype, model->device);
+                // int mlp_down_start = clock();
                 llaisys::ops::linear(mlp_output, mlp_hidden, mlp_down_w, nullptr);
+                // printf("Layer %zu: MLP Down Linear time %.2f ms\n", layer, (clock() - mlp_down_start) * 1000.0 / CLOCKS_PER_SEC);
                 
                 // 残差连接: x = attn_residual + mlp_output
                 llaisys::ops::add(layer_output, attn_residual, mlp_output);
                 
                 // 更新x为下一层的输入
                 x = layer_output;
+                // printf("Layer %zu: Total MLP time %.2f ms\n", layer, (clock() - mlp_start) * 1000.0 / CLOCKS_PER_SEC);
+                // printf("Layer %zu: Total Layer time %.2f ms\n", layer, (clock() - layer_start) * 1000.0 / CLOCKS_PER_SEC);
             }
+
+            // int final_start = clock();
+            // 3. 输出层 - 优化：只计算最后一个token的输出
+            // 获取最后一个token的隐藏状态
+            auto last_hidden = x->slice(0, ntoken - 1, ntoken); // shape: [1, hidden_size]
+            auto last_hidden_2d = last_hidden->view({1, meta->hs}); // 确保是2D
             
-            // 3. 输出层
-            // 最终LayerNorm
+            // 最终LayerNorm - 只对最后一个token
+            auto last_normed = llaisys::Tensor::create({1, meta->hs}, meta->dtype, model->device);
             auto out_norm_w = weights.out_norm_w->tensor;
-            auto normed_output = llaisys::Tensor::create({ntoken, meta->hs}, meta->dtype, model->device);
-            llaisys::ops::rms_norm(normed_output, x, out_norm_w, meta->epsilon);
+            llaisys::ops::rms_norm(last_normed, last_hidden_2d, out_norm_w, meta->epsilon);
             
-            // 输出嵌入层 (Language Model Head)
+            // 输出嵌入层 (Language Model Head) - 只计算最后一个token
+            auto last_logits_2d = llaisys::Tensor::create({1, meta->voc}, meta->dtype, model->device);
             auto out_embed_tensor = weights.out_embed->tensor;
-            auto logits = llaisys::Tensor::create({ntoken, meta->voc}, meta->dtype, model->device);
-            llaisys::ops::linear(logits, normed_output, out_embed_tensor, nullptr);
+            llaisys::ops::linear(last_logits_2d, last_normed, out_embed_tensor, nullptr);
             
-            // 4. 取最后一个token的logits并进行argmax
-            // 获取最后一个token的logits: [vocab_size]
-            // 修复slice操作 - 直接获取最后一行
-            auto last_logits = logits->slice(0, ntoken - 1, ntoken); // shape: [1, vocab_size]
-            auto last_logits_1d = last_logits->view({meta->voc}); // shape: [vocab_size]
+            // 4. 对最后一个token的logits进行argmax
+            auto last_logits_1d = last_logits_2d->view({meta->voc}); // shape: [vocab_size]
             
-            // 进行argmax获取下一个token
-            auto max_idx = llaisys::Tensor::create({1}, LLAISYS_DTYPE_I64, model->device);
-            auto max_val = llaisys::Tensor::create({1}, meta->dtype, model->device);
-            
+            // 进行argmax获取下一个token            
             llaisys::ops::argmax(max_idx, max_val, last_logits_1d);
             
             // 获取结果
             int64_t* result_data = reinterpret_cast<int64_t*>(max_idx->data());
             int64_t next_token = result_data[0];
             
+            // printf("Time for final output and argmax: %.2f ms\n", (clock() - final_start) * 1000.0 / CLOCKS_PER_SEC);
             return next_token;
             
         } catch (const std::exception& e) {
